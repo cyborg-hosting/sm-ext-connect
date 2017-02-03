@@ -31,9 +31,8 @@
 
 #include "extension.h"
 #include "CDetour/detours.h"
-#include "steam/steamclientpublic.h"
-#include "steam/isteamuser.h"
-#include <sm_stringhashmap.h>
+#include "steam/steam_gameserver.h"
+#include "sm_namehashset.h"
 
 /**
  * @file extension.cpp
@@ -45,6 +44,7 @@ Connect g_Connect;		/**< Global singleton for extension's main interface */
 SMEXT_LINK(&g_Connect);
 
 ConVar g_ConnectVersion("connect_version", SMEXT_CONF_VERSION, FCVAR_REPLICATED|FCVAR_NOTIFY, SMEXT_CONF_DESCRIPTION " Version");
+ConVar g_SvNoSteam("sv_nosteam", "0", FCVAR_NOTIFY, "Disable steam validation");
 
 IGameConfig *g_pGameConf = NULL;
 IForward *g_pConnectForward = NULL;
@@ -60,16 +60,6 @@ typedef enum EAuthProtocol
 	k_EAuthProtocolHashedCDKey = 2,
 	k_EAuthProtocolSteam = 3,
 } EAuthProtocol;
-
-typedef enum EBeginAuthSessionResult
-{
-	k_EBeginAuthSessionResultOK = 0,				// Ticket is valid for this game and this steamID.
-	k_EBeginAuthSessionResultInvalidTicket = 1,		// Ticket is not valid.
-	k_EBeginAuthSessionResultDuplicateRequest = 2,	// A ticket has already been submitted for this steamID
-	k_EBeginAuthSessionResultInvalidVersion = 3,	// Ticket is from an incompatible interface version
-	k_EBeginAuthSessionResultGameMismatch = 4,		// Ticket is not for this game
-	k_EBeginAuthSessionResultExpiredTicket = 5,		// Ticket has expired
-} EBeginAuthSessionResult;
 
 typedef struct netadr_s
 {
@@ -91,14 +81,14 @@ public:
 const char *CSteamID::Render() const
 {
 	static char szSteamID[64];
-	V_snprintf(szSteamID, sizeof(szSteamID), "STEAM_0:%u:%u", (m_unAccountID % 2) ? 1 : 0, (int32)m_unAccountID/2);
+	V_snprintf(szSteamID, sizeof(szSteamID), "STEAM_0:%u:%u", (m_steamid.m_comp.m_unAccountID % 2) ? 1 : 0, (int32)m_steamid.m_comp.m_unAccountID/2);
 	return szSteamID;
 }
 
 class CSteam3Server
 {
 public:
-	void *m_pSteamGameServer;
+	ISteamGameServer *m_pSteamGameServer;
 	void *m_pSteamGameServerUtils;
 	void *m_pSteamGameServerNetworking;
 	void *m_pSteamGameServerStats;
@@ -157,71 +147,28 @@ void SetSteamID(CBaseClient *pClient, const CSteamID &steamID)
 #endif
 }
 
-class VFuncEmptyClass{};
-
-int g_nBeginAuthSessionOffset = 0;
-int g_nEndAuthSessionOffset = 0;
-
 EBeginAuthSessionResult BeginAuthSession(const void *pAuthTicket, int cbAuthTicket, CSteamID steamID)
 {
-	if(!g_pSteam3Server || !g_pSteam3Server->m_pSteamGameServer || g_nBeginAuthSessionOffset == 0)
+	if(!g_pSteam3Server || !g_pSteam3Server->m_pSteamGameServer)
 		return k_EBeginAuthSessionResultOK;
 
-	void **this_ptr = *(void ***)&g_pSteam3Server->m_pSteamGameServer;
-	void **vtable = *(void ***)g_pSteam3Server->m_pSteamGameServer;
-	void *func = vtable[g_nBeginAuthSessionOffset];
-
-	union {
-		EBeginAuthSessionResult (VFuncEmptyClass::*mfpnew)(const void *, int, CSteamID);
-
-#ifndef WIN32
-		struct {
-			void *addr;
-			intptr_t adjustor;
-		} s;
-	} u;
-
-	u.s.addr = func;
-	u.s.adjustor = 0;
-#else
-		void *addr;
-	} u;
-
-	u.addr = func;
-#endif
-
-	return (EBeginAuthSessionResult)(reinterpret_cast<VFuncEmptyClass*>(this_ptr)->*u.mfpnew)(pAuthTicket, cbAuthTicket, steamID);
+	return g_pSteam3Server->m_pSteamGameServer->BeginAuthSession(pAuthTicket, cbAuthTicket, steamID);
 }
 
 void EndAuthSession(CSteamID steamID)
 {
-	if(!g_pSteam3Server || !g_pSteam3Server->m_pSteamGameServer || g_nEndAuthSessionOffset == 0)
+	if(!g_pSteam3Server || !g_pSteam3Server->m_pSteamGameServer)
 		return;
 
-	void **this_ptr = *(void ***)&g_pSteam3Server->m_pSteamGameServer;
-	void **vtable = *(void ***)g_pSteam3Server->m_pSteamGameServer;
-	void *func = vtable[g_nEndAuthSessionOffset];
+	g_pSteam3Server->m_pSteamGameServer->EndAuthSession(steamID);
+}
 
-	union {
-		void (VFuncEmptyClass::*mfpnew)(CSteamID);
+bool BLoggedOn()
+{
+	if(!g_pSteam3Server || !g_pSteam3Server->m_pSteamGameServer)
+		return false;
 
-#ifndef WIN32
-		struct {
-			void *addr;
-			intptr_t adjustor;
-		} s;
-	} u;
-
-	u.s.addr = func;
-	u.s.adjustor = 0;
-#else
-		void *addr;
-	} u;
-
-	u.addr = func;
-#endif
-
-	return (void)(reinterpret_cast<VFuncEmptyClass*>(this_ptr)->*u.mfpnew)(steamID);
+	return g_pSteam3Server->m_pSteamGameServer->BLoggedOn();
 }
 
 CDetour *g_Detour_CBaseServer__ConnectClient = NULL;
@@ -267,6 +214,21 @@ StringHashMap<ConnectClientStorage> g_ConnectClientStorage;
 bool g_bEndAuthSessionOnRejectConnection = false;
 CSteamID g_lastClientSteamID;
 bool g_bSuppressCheckChallengeType = false;
+
+DETOUR_DECL_MEMBER1(CSteam3Server__OnValidateAuthTicketResponse, int, CSteamID *, steamID)
+{
+	char aSteamID[32];
+	V_strncpy(aSteamID, steamID->Render(), sizeof(aSteamID));
+
+	ConnectClientStorage Storage;
+	if(g_ConnectClientStorage.retrieve(aSteamID, &Storage))
+	{
+		Storage.Validated = true;
+		g_ConnectClientStorage.replace(aSteamID, Storage);
+	}
+
+	return DETOUR_MEMBER_CALL(CSteam3Server__OnValidateAuthTicketResponse)(steamID);
+}
 
 DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, int, nProtocol, int, iChallenge, int, iClientChallenge, int, nAuthProtocol, const char *, pchName, const char *, pchPassword, const char *, pCookie, int, cbCookie)
 {
@@ -316,11 +278,17 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 			AsyncWaiting = true;
 	}
 
+	bool noSteam = false;
 	EBeginAuthSessionResult result = BeginAuthSession(pvTicket, cbTicket, g_lastClientSteamID);
 	if(result != k_EBeginAuthSessionResultOK)
 	{
-		RejectConnection(address, iClientChallenge, "#GameUI_ServerRejectSteam");
-		return NULL;
+		if(g_SvNoSteam.GetInt() || !BLoggedOn())
+			noSteam = true;
+		else
+		{
+			RejectConnection(address, iClientChallenge, "#GameUI_ServerRejectSteam");
+			return NULL;
+		}
 	}
 
 	char rejectReason[255];
@@ -364,7 +332,12 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 
 	// k_OnClientPreConnectEx_Accept
 	g_bSuppressCheckChallengeType = true;
-	return DETOUR_MEMBER_CALL(CBaseServer__ConnectClient)(address, nProtocol, iChallenge, iClientChallenge, nAuthProtocol, pchName, pchPassword, pCookie, cbCookie);
+	IClient *pClient = DETOUR_MEMBER_CALL(CBaseServer__ConnectClient)(address, nProtocol, iChallenge, iClientChallenge, nAuthProtocol, pchName, pchPassword, pCookie, cbCookie);
+
+	if(pClient && (noSteam || !BLoggedOn()))
+		DETOUR_MEMBER_MCALL_CALLBACK(CSteam3Server__OnValidateAuthTicketResponse, g_pSteam3Server)(&g_lastClientSteamID);
+
+	return pClient;
 }
 
 DETOUR_DECL_MEMBER3(CBaseServer__RejectConnection, void, netadr_t &, address, int, iClientChallenge, const char *, pchReason)
@@ -391,21 +364,6 @@ DETOUR_DECL_MEMBER7(CBaseServer__CheckChallengeType, bool, CBaseClient *, pClien
 	}
 
 	return DETOUR_MEMBER_CALL(CBaseServer__CheckChallengeType)(pClient, nUserID, address, nAuthProtocol, pCookie, cbCookie, iClientChallenge);
-}
-
-DETOUR_DECL_MEMBER1(CSteam3Server__OnValidateAuthTicketResponse, int, CSteamID *, steamID)
-{
-	char aSteamID[32];
-	V_strncpy(aSteamID, steamID->Render(), sizeof(aSteamID));
-
-	ConnectClientStorage Storage;
-	if(g_ConnectClientStorage.retrieve(aSteamID, &Storage))
-	{
-		Storage.Validated = true;
-		g_ConnectClientStorage.replace(aSteamID, Storage);
-	}
-
-	return DETOUR_MEMBER_CALL(CSteam3Server__OnValidateAuthTicketResponse)(steamID);
 }
 
 bool Connect::SDK_OnLoad(char *error, size_t maxlen, bool late)
@@ -468,18 +426,6 @@ bool Connect::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	META_CONPRINTF("ISteamNetworking: %p\n", g_pSteam3Server->m_pSteamGameServerNetworking);
 	META_CONPRINTF("ISteamGameServerStats: %p\n", g_pSteam3Server->m_pSteamGameServerStats);
 	*/
-
-	if(!g_pGameConf->GetOffset("ISteamGameServer__BeginAuthSession", &g_nBeginAuthSessionOffset) || g_nBeginAuthSessionOffset == 0)
-	{
-		snprintf(error, maxlen, "Failed to find ISteamGameServer__BeginAuthSession offset.\n");
-		return false;
-	}
-
-	if(!g_pGameConf->GetOffset("ISteamGameServer__EndAuthSession", &g_nEndAuthSessionOffset) || g_nEndAuthSessionOffset == 0)
-	{
-		snprintf(error, maxlen, "Failed to find ISteamGameServer__EndAuthSession offset.\n");
-		return false;
-	}
 
 	CDetourManager::Init(g_pSM->GetScriptingEngine(), g_pGameConf);
 

@@ -19,8 +19,7 @@ WinLinux = ['windows', 'linux']
 WinLinuxMac = ['windows', 'linux', 'mac']
 
 PossibleSDKs = {
-  'ep2':  SDK('HL2SDKOB', '2.ep2', '3', 'ORANGEBOX', WinLinux, 'orangebox'),
-  'css':  SDK('HL2SDKCSS', '2.css', '6', 'CSS', WinLinuxMac, 'css'),
+  'sdk2013': SDK('HL2SDK2013', '2.sdk2013', '9', 'SDK2013', WinLinuxMac, 'sdk2013'),
 }
 
 def ResolveEnvPath(env, folder):
@@ -124,7 +123,7 @@ class ExtensionConfig(object):
         '-pipe',
         '-fno-strict-aliasing',
         '-Wall',
-        '-Werror',
+#        '-Werror',
         '-Wno-unused',
         '-Wno-switch',
         '-Wno-array-bounds',

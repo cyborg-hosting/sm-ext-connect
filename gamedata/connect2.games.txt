@@ -8,23 +8,6 @@
 			"engine"	"css"
 		}
 
-		"Offsets"
-		{
-			"ISteamGameServer__BeginAuthSession"
-			{
-				"linux"			"29"
-				"mac"			"29"
-				"windows"		"29"
-			}
-
-			"ISteamGameServer__EndAuthSession"
-			{
-				"linux"			"30"
-				"mac"			"30"
-				"windows"		"30"
-			}
-		}
-
 		"Signatures"
 		{
 			"CBaseServer__ConnectClient"
