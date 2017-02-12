@@ -44,7 +44,8 @@ Connect g_Connect;		/**< Global singleton for extension's main interface */
 SMEXT_LINK(&g_Connect);
 
 ConVar g_ConnectVersion("connect_version", SMEXT_CONF_VERSION, FCVAR_REPLICATED|FCVAR_NOTIFY, SMEXT_CONF_DESCRIPTION " Version");
-ConVar g_SvNoSteam("sv_nosteam", "0", FCVAR_NOTIFY, "Disable steam validation");
+ConVar g_SvNoSteam("sv_nosteam", "0", FCVAR_NOTIFY, "Disable steam validation and force steam authentication.");
+ConVar g_SvForceSteam("sv_forcesteam", "0", FCVAR_NOTIFY, "Force steam authentication.");
 
 IGameConfig *g_pGameConf = NULL;
 IForward *g_pConnectForward = NULL;
@@ -192,7 +193,8 @@ public:
 	int cbCookie;
 
 	uint64 ullSteamID;
-	bool Validated;
+	ValidateAuthTicketResponse_t ValidateAuthTicketResponse;
+	bool GotValidateAuthTicketResponse;
 
 	ConnectClientStorage() { }
 	ConnectClientStorage(netadr_t address, int nProtocol, int iChallenge, int iClientChallenge, int nAuthProtocol, const char *pchName, const char *pchPassword, const char *pCookie, int cbCookie)
@@ -206,7 +208,7 @@ public:
 		strncpy(this->pchPassword, pchPassword, sizeof(this->pchPassword));
 		strncpy(this->pCookie, pCookie, sizeof(this->pCookie));
 		this->cbCookie = cbCookie;
-		this->Validated = false;
+		this->GotValidateAuthTicketResponse = false;
 	}
 };
 StringHashMap<ConnectClientStorage> g_ConnectClientStorage;
@@ -215,19 +217,20 @@ bool g_bEndAuthSessionOnRejectConnection = false;
 CSteamID g_lastClientSteamID;
 bool g_bSuppressCheckChallengeType = false;
 
-DETOUR_DECL_MEMBER1(CSteam3Server__OnValidateAuthTicketResponse, int, CSteamID *, steamID)
+DETOUR_DECL_MEMBER1(CSteam3Server__OnValidateAuthTicketResponse, int, ValidateAuthTicketResponse_t *, pResponse)
 {
 	char aSteamID[32];
-	V_strncpy(aSteamID, steamID->Render(), sizeof(aSteamID));
+	V_strncpy(aSteamID, pResponse->m_SteamID.Render(), sizeof(aSteamID));
 
 	ConnectClientStorage Storage;
 	if(g_ConnectClientStorage.retrieve(aSteamID, &Storage))
 	{
-		Storage.Validated = true;
+		Storage.GotValidateAuthTicketResponse = true;
+		Storage.ValidateAuthTicketResponse = *pResponse;
 		g_ConnectClientStorage.replace(aSteamID, Storage);
 	}
 
-	return DETOUR_MEMBER_CALL(CSteam3Server__OnValidateAuthTicketResponse)(steamID);
+	return DETOUR_MEMBER_CALL(CSteam3Server__OnValidateAuthTicketResponse)(pResponse);
 }
 
 DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, int, nProtocol, int, iChallenge, int, iClientChallenge, int, nAuthProtocol, const char *, pchName, const char *, pchPassword, const char *, pCookie, int, cbCookie)
@@ -278,17 +281,12 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 			AsyncWaiting = true;
 	}
 
-	bool noSteam = false;
+	bool noSteam = g_SvNoSteam.GetInt() || !BLoggedOn();
 	EBeginAuthSessionResult result = BeginAuthSession(pvTicket, cbTicket, g_lastClientSteamID);
-	if(result != k_EBeginAuthSessionResultOK)
+	if(result != k_EBeginAuthSessionResultOK && !noSteam)
 	{
-		if(g_SvNoSteam.GetInt() || !BLoggedOn())
-			noSteam = true;
-		else
-		{
-			RejectConnection(address, iClientChallenge, "#GameUI_ServerRejectSteam");
-			return NULL;
-		}
+		RejectConnection(address, iClientChallenge, "#GameUI_ServerRejectSteam");
+		return NULL;
 	}
 
 	char rejectReason[255];
@@ -334,8 +332,14 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 	g_bSuppressCheckChallengeType = true;
 	IClient *pClient = DETOUR_MEMBER_CALL(CBaseServer__ConnectClient)(address, nProtocol, iChallenge, iClientChallenge, nAuthProtocol, pchName, pchPassword, pCookie, cbCookie);
 
-	if(pClient && (noSteam || !BLoggedOn()))
-		DETOUR_MEMBER_MCALL_CALLBACK(CSteam3Server__OnValidateAuthTicketResponse, g_pSteam3Server)(&g_lastClientSteamID);
+	if(pClient && (noSteam || g_SvForceSteam.GetInt()))
+	{
+		ValidateAuthTicketResponse_t Response;
+		Response.m_SteamID = g_lastClientSteamID;
+		Response.m_eAuthSessionResponse = k_EAuthSessionResponseOK;
+		Response.m_OwnerSteamID = Response.m_SteamID;
+		DETOUR_MEMBER_MCALL_CALLBACK(CSteam3Server__OnValidateAuthTicketResponse, g_pSteam3Server)(&Response);
+	}
 
 	return pClient;
 }
@@ -525,8 +529,6 @@ cell_t ClientPreConnectEx(IPluginContext *pContext, const cell_t *params)
 
 	g_ConnectClientStorage.remove(pSteamID);
 
-	g_lastClientSteamID = CSteamID(Storage.ullSteamID);
-
 	if(retVal == 0)
 	{
 		RejectConnection(Storage.address, Storage.iClientChallenge, rejectReason);
@@ -534,12 +536,23 @@ cell_t ClientPreConnectEx(IPluginContext *pContext, const cell_t *params)
 	}
 
 	g_bSuppressCheckChallengeType = true;
-	DETOUR_MEMBER_MCALL_ORIGINAL(CBaseServer__ConnectClient, Storage.pThis)(Storage.address, Storage.nProtocol, Storage.iChallenge, Storage.iClientChallenge,
+	IClient *pClient = DETOUR_MEMBER_MCALL_ORIGINAL(CBaseServer__ConnectClient, Storage.pThis)(Storage.address, Storage.nProtocol, Storage.iChallenge, Storage.iClientChallenge,
 		Storage.nAuthProtocol, Storage.pchName, Storage.pchPassword, Storage.pCookie, Storage.cbCookie);
 
+	if(!pClient)
+		return 1;
+
+	if(g_SvNoSteam.GetInt() || g_SvForceSteam.GetInt() || !BLoggedOn())
+	{
+		Storage.ValidateAuthTicketResponse.m_SteamID = CSteamID(Storage.ullSteamID);
+		Storage.ValidateAuthTicketResponse.m_eAuthSessionResponse = k_EAuthSessionResponseOK;
+		Storage.ValidateAuthTicketResponse.m_OwnerSteamID = Storage.ValidateAuthTicketResponse.m_SteamID;
+		Storage.GotValidateAuthTicketResponse = true;
+	}
+
 	// Make sure this is always called in order to verify the client on the server
-	if(Storage.Validated)
-		DETOUR_MEMBER_MCALL_ORIGINAL(CSteam3Server__OnValidateAuthTicketResponse, g_pSteam3Server)(&g_lastClientSteamID);
+	if(Storage.GotValidateAuthTicketResponse)
+		DETOUR_MEMBER_MCALL_ORIGINAL(CSteam3Server__OnValidateAuthTicketResponse, g_pSteam3Server)(&Storage.ValidateAuthTicketResponse);
 
 	return 0;
 }
