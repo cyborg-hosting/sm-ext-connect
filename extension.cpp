@@ -187,9 +187,9 @@ public:
 	int iChallenge;
 	int iClientChallenge;
 	int nAuthProtocol;
-	char pchName[255];
-	char pchPassword[255];
-	char pCookie[255];
+	char pchName[256];
+	char pchPassword[256];
+	char pCookie[256];
 	int cbCookie;
 
 	uint64 ullSteamID;
@@ -206,9 +206,9 @@ public:
 		this->iChallenge = iChallenge;
 		this->iClientChallenge = iClientChallenge;
 		this->nAuthProtocol = nAuthProtocol;
-		strncpy(this->pchName, pchName, sizeof(this->pchName));
-		strncpy(this->pchPassword, pchPassword, sizeof(this->pchPassword));
-		strncpy(this->pCookie, pCookie, sizeof(this->pCookie));
+		strncpy(this->pchName, pchName, sizeof(this->pchName) - 1);
+		strncpy(this->pchPassword, pchPassword, sizeof(this->pchPassword) - 1);
+		strncpy(this->pCookie, pCookie, sizeof(this->pCookie) - 1);
 		this->cbCookie = cbCookie;
 		this->GotValidateAuthTicketResponse = false;
 		this->SteamLegal = false;
