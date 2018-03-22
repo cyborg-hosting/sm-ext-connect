@@ -13,6 +13,7 @@ enum EConnect
 forward EConnect OnClientPreConnectEx(const char[] sName, char sPassword[255], const char[] sIP, const char[] sSteam32ID, char sRejectReason[255]);
 
 native bool ClientPreConnectEx(const char[] sSteam32ID, EConnect RetVal, char sRejectReason[255]);
+native bool SteamClientAuthenticated(const char[] sSteam32ID);
 
 /**
  * Do not edit below this line!

@@ -40,7 +40,7 @@
 /* Basic information exposed publicly */
 #define SMEXT_CONF_NAME			"Connect"
 #define SMEXT_CONF_DESCRIPTION	"Forward for early connection"
-#define SMEXT_CONF_VERSION		"2.2"
+#define SMEXT_CONF_VERSION		"2.3"
 #define SMEXT_CONF_AUTHOR		"Asher \"asherkin\" Baker + BotoX"
 #define SMEXT_CONF_URL			"https://github.com/CSSZombieEscape/sm-ext-connect"
 #define SMEXT_CONF_LOGTAG		"CONNECT"
@@ -61,7 +61,7 @@
 /** Enable interfaces you want to use here by uncommenting lines */
 #define SMEXT_ENABLE_FORWARDSYS
 //#define SMEXT_ENABLE_HANDLESYS
-//#define SMEXT_ENABLE_PLAYERHELPERS
+#define SMEXT_ENABLE_PLAYERHELPERS
 //#define SMEXT_ENABLE_DBMANAGER
 #define SMEXT_ENABLE_GAMECONF
 //#define SMEXT_ENABLE_MEMUTILS

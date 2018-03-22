@@ -46,7 +46,8 @@
  */
 class Connect :
 	public SDKExtension,
-	public IConCommandBaseAccessor
+	public IConCommandBaseAccessor,
+	public IClientListener
 {
 public:
 	/**
@@ -119,6 +120,9 @@ public:
 
 public:  // IConCommandBaseAccessor
 	virtual bool RegisterConCommandBase(ConCommandBase *pVar);
+
+public: // IClientListener
+	void OnClientDisconnecting(int client);
 };
 
 #endif // _INCLUDE_SOURCEMOD_EXTENSION_PROPER_H_
