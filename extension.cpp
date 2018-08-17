@@ -228,18 +228,22 @@ DETOUR_DECL_MEMBER1(CSteam3Server__OnValidateAuthTicketResponse, int, ValidateAu
 
 	bool SteamLegal = pResponse->m_eAuthSessionResponse == k_EAuthSessionResponseOK;
 	bool force = g_SvNoSteam.GetInt() || g_SvForceSteam.GetInt() || !BLoggedOn();
+
+	g_pSM->LogMessage(myself, "SteamLegal: %d (%d)\n", SteamLegal, pResponse->m_eAuthSessionResponse);
+
 	if(!SteamLegal && force)
 		pResponse->m_eAuthSessionResponse = k_EAuthSessionResponseOK;
-
-	printf("SteamLegal: %d\n", SteamLegal);
 
 	ConnectClientStorage Storage;
 	if(g_ConnectClientStorage.retrieve(aSteamID, &Storage))
 	{
-		Storage.GotValidateAuthTicketResponse = true;
-		Storage.ValidateAuthTicketResponse = *pResponse;
-		Storage.SteamLegal = SteamLegal;
-		g_ConnectClientStorage.replace(aSteamID, Storage);
+		if(!Storage.GotValidateAuthTicketResponse)
+		{
+			Storage.GotValidateAuthTicketResponse = true;
+			Storage.ValidateAuthTicketResponse = *pResponse;
+			Storage.SteamLegal = SteamLegal;
+			g_ConnectClientStorage.replace(aSteamID, Storage);
+		}
 	}
 
 	return DETOUR_MEMBER_CALL(CSteam3Server__OnValidateAuthTicketResponse)(pResponse);
@@ -322,7 +326,7 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 		pchPassword = passwordBuffer;
 	}
 
-	printf("SteamAuthFailed: %d | retVal = %d\n", SteamAuthFailed, retVal);
+	g_pSM->LogMessage(myself, "SteamAuthFailed: %d (%d) | retVal = %d\n", SteamAuthFailed, result, retVal);
 
 	// k_OnClientPreConnectEx_Reject
 	if(retVal == 0)
@@ -563,7 +567,7 @@ cell_t ClientPreConnectEx(IPluginContext *pContext, const cell_t *params)
 	bool force = g_SvNoSteam.GetInt() || g_SvForceSteam.GetInt() || !BLoggedOn();
 	if(Storage.SteamAuthFailed && force && !Storage.GotValidateAuthTicketResponse)
 	{
-		printf("Force ValidateAuthTicketResponse\n");
+		g_pSM->LogMessage(myself, "Force ValidateAuthTicketResponse\n");
 		Storage.ValidateAuthTicketResponse.m_SteamID = CSteamID(Storage.ullSteamID);
 		Storage.ValidateAuthTicketResponse.m_eAuthSessionResponse = k_EAuthSessionResponseOK;
 		Storage.ValidateAuthTicketResponse.m_OwnerSteamID = Storage.ValidateAuthTicketResponse.m_SteamID;
@@ -573,7 +577,7 @@ cell_t ClientPreConnectEx(IPluginContext *pContext, const cell_t *params)
 	// Make sure this is always called in order to verify the client on the server
 	if(Storage.GotValidateAuthTicketResponse)
 	{
-		printf("Replay ValidateAuthTicketResponse\n");
+		g_pSM->LogMessage(myself, "Replay ValidateAuthTicketResponse\n");
 		DETOUR_MEMBER_MCALL_ORIGINAL(CSteam3Server__OnValidateAuthTicketResponse, g_pSteam3Server)(&Storage.ValidateAuthTicketResponse);
 	}
 
@@ -588,9 +592,11 @@ cell_t SteamClientAuthenticated(IPluginContext *pContext, const cell_t *params)
 	ConnectClientStorage Storage;
 	if(g_ConnectClientStorage.retrieve(pSteamID, &Storage))
 	{
+		g_pSM->LogMessage(myself, "SteamClientAuthenticated: %d\n", Storage.SteamLegal);
 		return Storage.SteamLegal;
 	}
 
+	g_pSM->LogMessage(myself, "SteamClientAuthenticated: FALSE!\n");
 	return false;
 }
 
@@ -608,6 +614,8 @@ void Connect::SDK_OnAllLoaded()
 
 void Connect::OnClientDisconnecting(int client)
 {
+	g_pSM->LogMessage(myself, "OnClientDisconnecting: %d\n", client);
+
 	IGamePlayer *pPlayer = playerhelpers->GetGamePlayer(client);
 	if(pPlayer)
 	{
