@@ -33,6 +33,7 @@
 #include "CDetour/detours.h"
 #include "steam/steam_gameserver.h"
 #include "sm_namehashset.h"
+#include <iclient.h>
 
 /**
  * @file extension.cpp
@@ -191,6 +192,7 @@ public:
 	char pchPassword[256];
 	char pCookie[256];
 	int cbCookie;
+	IClient *pClient;
 
 	uint64 ullSteamID;
 	ValidateAuthTicketResponse_t ValidateAuthTicketResponse;
@@ -210,6 +212,7 @@ public:
 		strncpy(this->pchPassword, pchPassword, sizeof(this->pchPassword) - 1);
 		strncpy(this->pCookie, pCookie, sizeof(this->pCookie) - 1);
 		this->cbCookie = cbCookie;
+		this->pClient = NULL;
 		this->GotValidateAuthTicketResponse = false;
 		this->SteamLegal = false;
 		this->SteamAuthFailed = false;
@@ -229,7 +232,7 @@ DETOUR_DECL_MEMBER1(CSteam3Server__OnValidateAuthTicketResponse, int, ValidateAu
 	bool SteamLegal = pResponse->m_eAuthSessionResponse == k_EAuthSessionResponseOK;
 	bool force = g_SvNoSteam.GetInt() || g_SvForceSteam.GetInt() || !BLoggedOn();
 
-	g_pSM->LogMessage(myself, "SteamLegal: %d (%d)\n", SteamLegal, pResponse->m_eAuthSessionResponse);
+	g_pSM->LogMessage(myself, "%s SteamLegal: %d (%d)", aSteamID, SteamLegal, pResponse->m_eAuthSessionResponse);
 
 	if(!SteamLegal && force)
 		pResponse->m_eAuthSessionResponse = k_EAuthSessionResponseOK;
@@ -281,22 +284,6 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 	char aSteamID[32];
 	V_strncpy(aSteamID, g_lastClientSteamID.Render(), sizeof(aSteamID));
 
-	// If client is in async state remove the old object and fake an async retVal
-	// This can happen if the async ClientPreConnectEx takes too long to be called
-	// and the client auto-retries.
-	bool AsyncWaiting = false;
-	ConnectClientStorage Storage(address, nProtocol, iChallenge, iClientChallenge, nAuthProtocol, pchName, pchPassword, pCookie, cbCookie);
-	if(g_ConnectClientStorage.retrieve(aSteamID, &Storage))
-	{
-		g_ConnectClientStorage.remove(aSteamID);
-		EndAuthSession(g_lastClientSteamID);
-
-		// Only wait for async on auto-retry, manual retries should go through the full chain
-		// Don't want to leave the client waiting forever if something breaks in the async forward
-		if(Storage.iClientChallenge == iClientChallenge)
-			AsyncWaiting = true;
-	}
-
 	bool NoSteam = g_SvNoSteam.GetInt() || !BLoggedOn();
 	bool SteamAuthFailed = false;
 	EBeginAuthSessionResult result = BeginAuthSession(pvTicket, cbTicket, g_lastClientSteamID);
@@ -307,11 +294,51 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 			RejectConnection(address, iClientChallenge, "#GameUI_ServerRejectSteam");
 			return NULL;
 		}
-		Storage.SteamAuthFailed = SteamAuthFailed = true;
+		SteamAuthFailed = true;
 	}
 
 	char rejectReason[255];
 	cell_t retVal = 1;
+
+	// If client is in async state remove the old object and fake an async retVal
+	// This can happen if the async ClientPreConnectEx takes too long to be called
+	// and the client auto-retries.
+	bool AsyncWaiting = false;
+	ConnectClientStorage Storage(address, nProtocol, iChallenge, iClientChallenge, nAuthProtocol, pchName, pchPassword, pCookie, cbCookie);
+	if(g_ConnectClientStorage.retrieve(aSteamID, &Storage))
+	{
+		// Another player trying to spoof a Steam ID or game crashed?
+		if(memcmp(address.ip, Storage.address.ip, sizeof(address.ip)) != 0)
+		{
+			// Reject NoSteam players
+			if(SteamAuthFailed)
+			{
+				RejectConnection(address, iClientChallenge, "Steam ID already in use.");
+				return NULL;
+			}
+
+			// Kick existing player
+			if(Storage.pClient)
+			{
+				Storage.pClient->Disconnect("Same Steam ID connected.");
+			}
+			else
+			{
+				RejectConnection(address, iClientChallenge, "Please try again later.");
+				return NULL;
+			}
+		}
+
+		g_ConnectClientStorage.remove(aSteamID);
+		EndAuthSession(g_lastClientSteamID);
+
+		// Only wait for async on auto-retry, manual retries should go through the full chain
+		// Don't want to leave the client waiting forever if something breaks in the async forward
+		if(Storage.iClientChallenge == iClientChallenge)
+			AsyncWaiting = true;
+	}
+
+	Storage.SteamAuthFailed = SteamAuthFailed;
 
 	if(AsyncWaiting)
 		retVal = -1; // Fake async return code when waiting for async call
@@ -326,7 +353,7 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 		pchPassword = passwordBuffer;
 	}
 
-	g_pSM->LogMessage(myself, "SteamAuthFailed: %d (%d) | retVal = %d\n", SteamAuthFailed, result, retVal);
+	g_pSM->LogMessage(myself, "%s SteamAuthFailed: %d (%d) | retVal = %d", aSteamID, SteamAuthFailed, result, retVal);
 
 	// k_OnClientPreConnectEx_Reject
 	if(retVal == 0)
@@ -355,6 +382,9 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 	// k_OnClientPreConnectEx_Accept
 	g_bSuppressCheckChallengeType = true;
 	IClient *pClient = DETOUR_MEMBER_CALL(CBaseServer__ConnectClient)(address, nProtocol, iChallenge, iClientChallenge, nAuthProtocol, pchName, pchPassword, pCookie, cbCookie);
+
+	Storage.pClient = pClient;
+	g_ConnectClientStorage.replace(aSteamID, Storage);
 
 	if(pClient && SteamAuthFailed)
 	{
@@ -491,6 +521,8 @@ bool Connect::SDK_OnLoad(char *error, size_t maxlen, bool late)
 
 	g_pConnectForward = g_pForwards->CreateForward("OnClientPreConnectEx", ET_LowEvent, 5, NULL, Param_String, Param_String, Param_String, Param_String, Param_String);
 
+	playerhelpers->AddClientListener(&g_Connect);
+
 	return true;
 }
 
@@ -527,6 +559,8 @@ void Connect::SDK_OnUnload()
 		g_Detour_CSteam3Server__OnValidateAuthTicketResponse->Destroy();
 		g_Detour_CSteam3Server__OnValidateAuthTicketResponse = NULL;
 	}
+
+	playerhelpers->RemoveClientListener(&g_Connect);
 
 	gameconfs->CloseGameConfigFile(g_pGameConf);
 }
@@ -567,7 +601,7 @@ cell_t ClientPreConnectEx(IPluginContext *pContext, const cell_t *params)
 	bool force = g_SvNoSteam.GetInt() || g_SvForceSteam.GetInt() || !BLoggedOn();
 	if(Storage.SteamAuthFailed && force && !Storage.GotValidateAuthTicketResponse)
 	{
-		g_pSM->LogMessage(myself, "Force ValidateAuthTicketResponse\n");
+		g_pSM->LogMessage(myself, "%s Force ValidateAuthTicketResponse", pSteamID);
 		Storage.ValidateAuthTicketResponse.m_SteamID = CSteamID(Storage.ullSteamID);
 		Storage.ValidateAuthTicketResponse.m_eAuthSessionResponse = k_EAuthSessionResponseOK;
 		Storage.ValidateAuthTicketResponse.m_OwnerSteamID = Storage.ValidateAuthTicketResponse.m_SteamID;
@@ -577,7 +611,7 @@ cell_t ClientPreConnectEx(IPluginContext *pContext, const cell_t *params)
 	// Make sure this is always called in order to verify the client on the server
 	if(Storage.GotValidateAuthTicketResponse)
 	{
-		g_pSM->LogMessage(myself, "Replay ValidateAuthTicketResponse\n");
+		g_pSM->LogMessage(myself, "%s Replay ValidateAuthTicketResponse", pSteamID);
 		DETOUR_MEMBER_MCALL_ORIGINAL(CSteam3Server__OnValidateAuthTicketResponse, g_pSteam3Server)(&Storage.ValidateAuthTicketResponse);
 	}
 
@@ -592,11 +626,11 @@ cell_t SteamClientAuthenticated(IPluginContext *pContext, const cell_t *params)
 	ConnectClientStorage Storage;
 	if(g_ConnectClientStorage.retrieve(pSteamID, &Storage))
 	{
-		g_pSM->LogMessage(myself, "SteamClientAuthenticated: %d\n", Storage.SteamLegal);
+		g_pSM->LogMessage(myself, "%s SteamClientAuthenticated: %d", pSteamID, Storage.SteamLegal);
 		return Storage.SteamLegal;
 	}
 
-	g_pSM->LogMessage(myself, "SteamClientAuthenticated: FALSE!\n");
+	g_pSM->LogMessage(myself, "%s SteamClientAuthenticated: FALSE!", pSteamID);
 	return false;
 }
 
@@ -614,12 +648,11 @@ void Connect::SDK_OnAllLoaded()
 
 void Connect::OnClientDisconnecting(int client)
 {
-	g_pSM->LogMessage(myself, "OnClientDisconnecting: %d\n", client);
-
 	IGamePlayer *pPlayer = playerhelpers->GetGamePlayer(client);
 	if(pPlayer)
 	{
 		const char *pSteamID = pPlayer->GetSteam2Id(false);
+		g_pSM->LogMessage(myself, "%s OnClientDisconnecting: %d", pSteamID, client);
 		g_ConnectClientStorage.remove(pSteamID);
 	}
 }
