@@ -38,6 +38,7 @@
  */
 
 #include "smsdk_ext.h"
+#include <igameevents.h>
 
 
 /**
@@ -46,8 +47,7 @@
  */
 class Connect :
 	public SDKExtension,
-	public IConCommandBaseAccessor,
-	public IClientListener
+	public IConCommandBaseAccessor
 {
 public:
 	/**
@@ -120,9 +120,14 @@ public:
 
 public:  // IConCommandBaseAccessor
 	virtual bool RegisterConCommandBase(ConCommandBase *pVar);
-
-public: // IClientListener
-	void OnClientDisconnecting(int client);
 };
+
+class ConnectEvents : public IGameEventListener2
+{
+public:
+	virtual void FireGameEvent( IGameEvent *event );
+};
+
+extern ConnectEvents g_ConnectEvents;
 
 #endif // _INCLUDE_SOURCEMOD_EXTENSION_PROPER_H_

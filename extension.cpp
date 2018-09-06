@@ -41,6 +41,7 @@
  */
 
 Connect g_Connect;		/**< Global singleton for extension's main interface */
+ConnectEvents g_ConnectEvents;
 
 SMEXT_LINK(&g_Connect);
 
@@ -50,6 +51,7 @@ ConVar g_SvForceSteam("sv_forcesteam", "0", FCVAR_NOTIFY, "Force steam authentic
 
 IGameConfig *g_pGameConf = NULL;
 IForward *g_pConnectForward = NULL;
+IGameEventManager2 *g_pGameEvents = NULL;
 
 class IClient;
 class CBaseClient;
@@ -521,13 +523,14 @@ bool Connect::SDK_OnLoad(char *error, size_t maxlen, bool late)
 
 	g_pConnectForward = g_pForwards->CreateForward("OnClientPreConnectEx", ET_LowEvent, 5, NULL, Param_String, Param_String, Param_String, Param_String, Param_String);
 
-	playerhelpers->AddClientListener(&g_Connect);
+	g_pGameEvents->AddListener(&g_ConnectEvents, "player_disconnect", true);
 
 	return true;
 }
 
 bool Connect::SDK_OnMetamodLoad(ISmmAPI *ismm, char *error, size_t maxlen, bool late)
 {
+	GET_V_IFACE_CURRENT(GetEngineFactory, g_pGameEvents, IGameEventManager2, INTERFACEVERSION_GAMEEVENTSMANAGER2);
 	GET_V_IFACE_CURRENT(GetEngineFactory, g_pCVar, ICvar, CVAR_INTERFACE_VERSION);
 	ConVar_Register(0, this);
 
@@ -560,7 +563,7 @@ void Connect::SDK_OnUnload()
 		g_Detour_CSteam3Server__OnValidateAuthTicketResponse = NULL;
 	}
 
-	playerhelpers->RemoveClientListener(&g_Connect);
+	g_pGameEvents->RemoveListener(&g_ConnectEvents);
 
 	gameconfs->CloseGameConfigFile(g_pGameConf);
 }
@@ -646,13 +649,21 @@ void Connect::SDK_OnAllLoaded()
 	sharesys->AddNatives(myself, MyNatives);
 }
 
-void Connect::OnClientDisconnecting(int client)
+void ConnectEvents::FireGameEvent(IGameEvent *event)
 {
-	IGamePlayer *pPlayer = playerhelpers->GetGamePlayer(client);
-	if(pPlayer)
+	const char *name = event->GetName();
+
+	if(strcmp(name, "player_disconnect") == 0)
 	{
-		const char *pSteamID = pPlayer->GetSteam2Id(false);
-		g_pSM->LogMessage(myself, "%s OnClientDisconnecting: %d", pSteamID, client);
-		g_ConnectClientStorage.remove(pSteamID);
+		int userid = event->GetInt("userid");
+		int client = playerhelpers->GetClientOfUserId(userid);
+
+		IGamePlayer *pPlayer = playerhelpers->GetGamePlayer(client);
+		if(pPlayer)
+		{
+			const char *pSteamID = pPlayer->GetSteam2Id(false);
+			g_pSM->LogMessage(myself, "%s OnClientDisconnecting: %d", pSteamID, client);
+			g_ConnectClientStorage.remove(pSteamID);
+		}
 	}
 }
