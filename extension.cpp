@@ -286,6 +286,24 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 	char aSteamID[32];
 	V_strncpy(aSteamID, g_lastClientSteamID.Render(), sizeof(aSteamID));
 
+	// If client is in async state remove the old object and fake an async retVal
+	// This can happen if the async ClientPreConnectEx takes too long to be called
+	// and the client auto-retries.
+	bool AsyncWaiting = false;
+	bool ExistingSteamid = false;
+	ConnectClientStorage Storage(address, nProtocol, iChallenge, iClientChallenge, nAuthProtocol, pchName, pchPassword, pCookie, cbCookie);
+	if(g_ConnectClientStorage.retrieve(aSteamID, &Storage))
+	{
+		ExistingSteamid = true;
+		g_ConnectClientStorage.remove(aSteamID);
+		EndAuthSession(g_lastClientSteamID);
+
+		// Only wait for async on auto-retry, manual retries should go through the full chain
+		// Don't want to leave the client waiting forever if something breaks in the async forward
+		if(Storage.iClientChallenge == iClientChallenge)
+			AsyncWaiting = true;
+	}
+
 	bool NoSteam = g_SvNoSteam.GetInt() || !BLoggedOn();
 	bool SteamAuthFailed = false;
 	EBeginAuthSessionResult result = BeginAuthSession(pvTicket, cbTicket, g_lastClientSteamID);
@@ -296,18 +314,10 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 			RejectConnection(address, iClientChallenge, "#GameUI_ServerRejectSteam");
 			return NULL;
 		}
-		SteamAuthFailed = true;
+		Storage.SteamAuthFailed = SteamAuthFailed = true;
 	}
 
-	char rejectReason[255];
-	cell_t retVal = 1;
-
-	// If client is in async state remove the old object and fake an async retVal
-	// This can happen if the async ClientPreConnectEx takes too long to be called
-	// and the client auto-retries.
-	bool AsyncWaiting = false;
-	ConnectClientStorage Storage(address, nProtocol, iChallenge, iClientChallenge, nAuthProtocol, pchName, pchPassword, pCookie, cbCookie);
-	if(g_ConnectClientStorage.retrieve(aSteamID, &Storage))
+	if(ExistingSteamid && !AsyncWaiting)
 	{
 		// Another player trying to spoof a Steam ID or game crashed?
 		if(memcmp(address.ip, Storage.address.ip, sizeof(address.ip)) != 0)
@@ -330,17 +340,10 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 				return NULL;
 			}
 		}
-
-		g_ConnectClientStorage.remove(aSteamID);
-		EndAuthSession(g_lastClientSteamID);
-
-		// Only wait for async on auto-retry, manual retries should go through the full chain
-		// Don't want to leave the client waiting forever if something breaks in the async forward
-		if(Storage.iClientChallenge == iClientChallenge)
-			AsyncWaiting = true;
 	}
 
-	Storage.SteamAuthFailed = SteamAuthFailed;
+	char rejectReason[255];
+	cell_t retVal = 1;
 
 	if(AsyncWaiting)
 		retVal = -1; // Fake async return code when waiting for async call
