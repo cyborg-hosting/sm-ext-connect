@@ -40,14 +40,14 @@
 #include "smsdk_ext.h"
 #include <igameevents.h>
 
-
 /**
  * @brief Sample implementation of the SDK Extension.
  * Note: Uncomment one of the pre-defined virtual functions in order to use it.
  */
 class Connect :
 	public SDKExtension,
-	public IConCommandBaseAccessor
+	public IConCommandBaseAccessor,
+	public IClientListener
 {
 public:
 	/**
@@ -120,6 +120,12 @@ public:
 
 public:  // IConCommandBaseAccessor
 	virtual bool RegisterConCommandBase(ConCommandBase *pVar);
+
+public:  // IClientListener
+	virtual void OnClientSettingsChanged(int client);
+	virtual void OnClientPutInServer(int client);
+public:
+	void OnTimer();
 };
 
 class ConnectEvents : public IGameEventListener2
@@ -128,6 +134,11 @@ public:
 	virtual void FireGameEvent( IGameEvent *event );
 };
 
-extern ConnectEvents g_ConnectEvents;
+class ConnectTimer : public ITimedEvent
+{
+public:
+	virtual ResultType OnTimer(ITimer *pTimer, void *pData);
+	virtual void OnTimerEnd(ITimer *pTimer, void *pData);
+};
 
 #endif // _INCLUDE_SOURCEMOD_EXTENSION_PROPER_H_
