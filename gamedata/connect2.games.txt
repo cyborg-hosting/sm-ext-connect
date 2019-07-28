@@ -90,6 +90,12 @@
 				"library"		"engine"
 				"linux"			"@hltv"
 			}
+
+			"net_time"
+			{
+				"library"		"engine"
+				"linux"			"@net_time"
+			}
 		}
 
 		"Offsets"

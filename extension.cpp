@@ -97,6 +97,7 @@ IServer *iserver = NULL;
 CGlobalVars *gpGlobals = NULL;
 IHLTVDirector *hltvdirector = NULL;
 IHLTVServer *hltv = NULL;
+double *net_time = NULL;
 
 uint8_t g_UserIDtoClientMap[USHRT_MAX + 1];
 char g_ClientSteamIDMap[SM_MAXPLAYERS + 1][32];
@@ -142,7 +143,7 @@ struct CQueryCache
 		char name[MAX_PLAYER_NAME_LENGTH];
 		unsigned nameLen;
 		int32_t score;
-		float time;
+		double time;
 	} players[SM_MAXPLAYERS + 1];
 
 	struct CInfo
@@ -720,7 +721,7 @@ bool Hook_ProcessConnectionlessPacket(netpacket_t * packet)
 			pos += player.nameLen + 1;
 			*(int32_t *)&response[pos] = player.score; // Score | long | Player's score (usually "frags" or "kills".)
 			pos += 4;
-			*(float *)&response[pos] = gpGlobals->curtime - player.time; // Duration | float | Time (in seconds) player has been connected to the server.
+			*(float *)&response[pos] = *net_time - player.time; // Duration | float | Time (in seconds) player has been connected to the server.
 			pos += 4;
 		}
 
@@ -814,6 +815,12 @@ bool Connect::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	if(!g_pGameConf->GetMemSig("net_sockets", (void **)&net_sockets) || !net_sockets)
 	{
 		snprintf(error, maxlen, "Failed to find net_sockets address.\n");
+		return false;
+	}
+
+	if(!g_pGameConf->GetMemSig("net_time", (void **)&net_time) || !net_time)
+	{
+		snprintf(error, maxlen, "Failed to find net_time address.\n");
 		return false;
 	}
 
@@ -1066,7 +1073,7 @@ void Connect::SDK_OnAllLoaded()
 
 		INetChannelInfo *netinfo = (INetChannelInfo *)player.pClient->GetNetChannel();
 		if(netinfo)
-			player.time = netinfo->GetTimeConnected();
+			player.time = *net_time - netinfo->GetTimeConnected();
 		else
 			player.time = 0;
 
@@ -1146,7 +1153,7 @@ void ConnectEvents::FireGameEvent(IGameEvent *event)
 				player.fake = true;
 				g_QueryCache.info.nFakeClients++;
 			}
-			player.time = gpGlobals->curtime;
+			player.time = *net_time;
 			player.score = 0;
 			player.nameLen = strlcpy(player.name, player.pClient->GetClientName(), sizeof(player.name));
 
