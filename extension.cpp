@@ -711,7 +711,7 @@ bool Hook_ProcessConnectionlessPacket(netpacket_t * packet)
 		short pos = 6;
 		for(int i = 0; i < SM_MAXPLAYERS; i++)
 		{
-			CQueryCache::CPlayer &player = g_QueryCache.players[i];
+			const CQueryCache::CPlayer &player = g_QueryCache.players[i];
 			if(!player.active)
 				continue;
 
@@ -865,8 +865,6 @@ bool Connect::SDK_OnLoad(char *error, size_t maxlen, bool late)
 
 	playerhelpers->AddClientListener(this);
 
-	g_pConnectTimer = timersys->CreateTimer(&g_ConnectTimer, 1.0, NULL, TIMER_FLAG_REPEAT);
-
 	return true;
 }
 
@@ -917,7 +915,8 @@ void Connect::SDK_OnUnload()
 
 	playerhelpers->RemoveClientListener(this);
 
-	timersys->KillTimer(g_pConnectTimer);
+	if(g_pConnectTimer)
+		timersys->KillTimer(g_pConnectTimer);
 
 	gameconfs->CloseGameConfigFile(g_pGameConf);
 }
@@ -1033,6 +1032,8 @@ void Connect::SDK_OnAllLoaded()
 		return;
 	}
 
+	g_pConnectTimer = timersys->CreateTimer(&g_ConnectTimer, 1.0, NULL, TIMER_FLAG_REPEAT);
+
 	// A2S_INFO
 	CQueryCache::CInfo &info = g_QueryCache.info;
 	info.aGameDirLen = strlcpy(info.aGameDir, smutils->GetGameFolderName(), sizeof(info.aGameDir));
@@ -1050,17 +1051,20 @@ void Connect::SDK_OnAllLoaded()
 	UpdateQueryCache();
 
 	// A2S_PLAYER
-	for(int client = 1; client <= SM_MAXPLAYERS; client++)
+	for(int slot = 0; slot < iserver->GetClientCount(); slot++)
 	{
+		int client = slot + 1;
+		IClient *pClient = iserver->GetClient(slot);
+		if(!pClient || !pClient->IsConnected())
+			continue;
+
 		CQueryCache::CPlayer &player = g_QueryCache.players[client];
 		IGamePlayer *gplayer = playerhelpers->GetGamePlayer(client);
-		if(!gplayer || !gplayer->IsConnected())
-			continue;
 
 		if(!player.active)
 		{
 			g_QueryCache.info.nNumClients++;
-			if(gplayer->IsFakeClient() && !gplayer->IsSourceTV())
+			if(pClient->IsFakeClient() && !pClient->IsHLTV() && (!gplayer || (gplayer->IsConnected() && !gplayer->IsSourceTV())))
 			{
 				g_QueryCache.info.nFakeClients++;
 				player.fake = true;
@@ -1068,8 +1072,8 @@ void Connect::SDK_OnAllLoaded()
 		}
 
 		player.active = true;
-		player.pClient = iserver->GetClient(client - 1);
-		player.nameLen = strlcpy(player.name, gplayer->GetName(), sizeof(player.name));
+		player.pClient = pClient;
+		player.nameLen = strlcpy(player.name, pClient->GetClientName(), sizeof(player.name));
 
 		INetChannelInfo *netinfo = (INetChannelInfo *)player.pClient->GetNetChannel();
 		if(netinfo)
@@ -1077,13 +1081,16 @@ void Connect::SDK_OnAllLoaded()
 		else
 			player.time = 0;
 
-		IPlayerInfo *info = gplayer->GetPlayerInfo();
-		if(info)
-			player.score = info->GetFragCount();
-		else
-			player.score = 0;
+		if(gplayer && gplayer->IsConnected())
+		{
+			IPlayerInfo *info = gplayer->GetPlayerInfo();
+			if(info)
+				player.score = info->GetFragCount();
+			else
+				player.score = 0;
+		}
 
-		g_UserIDtoClientMap[gplayer->GetUserId()] = client;
+		g_UserIDtoClientMap[pClient->GetUserID()] = client;
 	}
 }
 
@@ -1092,7 +1099,8 @@ void Connect::OnClientSettingsChanged(int client)
 	if(client >= 1 && client <= SM_MAXPLAYERS)
 	{
 		CQueryCache::CPlayer &player = g_QueryCache.players[client];
-		player.nameLen = strlcpy(player.name, player.pClient->GetClientName(), sizeof(player.name));
+		if(player.active && player.pClient)
+			player.nameLen = strlcpy(player.name, player.pClient->GetClientName(), sizeof(player.name));
 	}
 }
 
@@ -1102,7 +1110,7 @@ void Connect::OnClientPutInServer(int client)
 	{
 		CQueryCache::CPlayer &player = g_QueryCache.players[client];
 		IGamePlayer *gplayer = playerhelpers->GetGamePlayer(client);
-		if(player.fake && gplayer->IsSourceTV())
+		if(player.active && player.fake && gplayer->IsSourceTV())
 		{
 			player.fake = false;
 			g_QueryCache.info.nFakeClients--;
@@ -1127,6 +1135,44 @@ void Connect::OnTimer()
 			player.score = info->GetFragCount();
 	}
 
+	/* SANITY CHECK */
+	int countedClients = 0;
+	for(int client = 1; client <= SM_MAXPLAYERS; client++)
+	{
+		CQueryCache::CPlayer &player = g_QueryCache.players[client];
+
+		IClient *pClient = NULL;
+		if((client - 1) < iserver->GetClientCount())
+			pClient = iserver->GetClient(client - 1);
+
+		if(!pClient || !pClient->IsConnected())
+		{
+			if(player.active)
+			{
+				g_pSM->LogMessage(myself, "SANITY_CHECK_FAIL: player.active(True) != pClient->IsConnected(False)");
+				g_pSM->LogMessage(myself, "\tCPlayer(client=%d, active=%d, fake=%d, pClient=%p, name=%s)", client, player.active, player.fake, player.pClient, player.name);
+				player.active = false;
+				player.pClient = NULL;
+			}
+			continue;
+		}
+
+		if(!player.active)
+		{
+			g_pSM->LogMessage(myself, "SANITY_CHECK_FAIL: player.active(False) != pClient->IsConnected(True)");
+			g_pSM->LogMessage(myself, "\tCPlayer(client=%d, name=%s)\n", client, pClient->GetClientName());
+		}
+
+		countedClients++;
+	}
+
+	if(countedClients != g_QueryCache.info.nNumClients)
+	{
+		g_pSM->LogMessage(myself, "SANITY_CHECK_FAIL: countedClients(%d) != nNumClients(%d)", countedClients, g_QueryCache.info.nNumClients);
+		g_QueryCache.info.nNumClients = countedClients;
+	}
+	/* SANITY CHECK */
+
 	UpdateQueryCache();
 }
 
@@ -1136,14 +1182,19 @@ void ConnectEvents::FireGameEvent(IGameEvent *event)
 
 	if(strcmp(name, "player_connect") == 0)
 	{
-		int client = event->GetInt("index") + 1;
-		int userid = event->GetInt("userid");
-		int bot = event->GetBool("bot");
+		const int client = event->GetInt("index") + 1;
+		const int userid = event->GetInt("userid");
+		const bool bot = event->GetBool("bot");
 		const char *name = event->GetString("name");
+
+		g_pSM->LogMessage(myself, "player_connect(client=%d, userid=%d, bot=%d, name=%s)", client, userid, bot, name);
 
 		if(client >= 1 && client <= SM_MAXPLAYERS)
 		{
 			CQueryCache::CPlayer &player = g_QueryCache.players[client];
+
+			g_pSM->LogMessage(myself, "\tPRE CPlayer(active=%d, fake=%d, pClient=%p)", player.active, player.fake, player.pClient);
+
 			player.active = true;
 			player.fake = false;
 			player.pClient = iserver->GetClient(client - 1);
@@ -1158,17 +1209,26 @@ void ConnectEvents::FireGameEvent(IGameEvent *event)
 			player.nameLen = strlcpy(player.name, player.pClient->GetClientName(), sizeof(player.name));
 
 			g_UserIDtoClientMap[userid] = client;
+
+			g_pSM->LogMessage(myself, "\tPOST CPlayer(active=%d, fake=%d, pClient=%p, name=%s)", player.active, player.fake, player.pClient, player.name);
 		}
+		else
+			g_pSM->LogMessage(myself, "\tIF_CLIENT_FAILED");
 	}
 	else if(strcmp(name, "player_disconnect") == 0)
 	{
-		int userid = event->GetInt("userid");
-		int client = g_UserIDtoClientMap[userid];
+		const int userid = event->GetInt("userid");
+		const int client = g_UserIDtoClientMap[userid];
 		g_UserIDtoClientMap[client] = 0;
+
+		g_pSM->LogMessage(myself, "player_disconnect(userid=%d, client=%d)", userid, client);
 
 		if(client >= 1 && client <= SM_MAXPLAYERS)
 		{
 			CQueryCache::CPlayer &player = g_QueryCache.players[client];
+
+			g_pSM->LogMessage(myself, "\tCPlayer(active=%d, fake=%d, pClient=%p, name=%s)", player.active, player.fake, player.pClient, player.name);
+
 			if(player.active)
 			{
 				g_QueryCache.info.nNumClients--;
@@ -1178,6 +1238,8 @@ void ConnectEvents::FireGameEvent(IGameEvent *event)
 			player.active = false;
 			player.pClient = NULL;
 		}
+		else
+			g_pSM->LogMessage(myself, "\tIF_CLIENT_FAILED");
 
 		if(client >= 1 && client <= SM_MAXPLAYERS)
 		{
