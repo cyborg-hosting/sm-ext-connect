@@ -1219,7 +1219,7 @@ void ConnectEvents::FireGameEvent(IGameEvent *event)
 	{
 		const int userid = event->GetInt("userid");
 		const int client = g_UserIDtoClientMap[userid];
-		g_UserIDtoClientMap[client] = 0;
+		g_UserIDtoClientMap[userid] = 0;
 
 		g_pSM->LogMessage(myself, "player_disconnect(userid=%d, client=%d)", userid, client);
 
