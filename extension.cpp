@@ -615,7 +615,7 @@ void UpdateQueryCache()
 
 	info_cache[pos++] = info.nMaxClients;
 
-	info_cache[pos++] = info.nFakeClients;
+	info_cache[pos++] = 0;//info.nFakeClients;
 
 	info_cache[pos++] = info.nServerType;
 
@@ -709,7 +709,7 @@ bool Hook_ProcessConnectionlessPacket(netpacket_t * packet)
 
 		uint8_t response[4+1+1+SM_MAXPLAYERS*(1+MAX_PLAYER_NAME_LENGTH+4+4)] = {0xFF, 0xFF, 0xFF, 0xFF, 'D', 0};
 		short pos = 6;
-		for(int i = 0; i < SM_MAXPLAYERS; i++)
+		for(int i = 1; i <= SM_MAXPLAYERS; i++)
 		{
 			const CQueryCache::CPlayer &player = g_QueryCache.players[i];
 			if(!player.active)
