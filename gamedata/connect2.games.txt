@@ -79,6 +79,12 @@
 				"linux"			"@_ZN11CBaseServer14ValidChallengeER8netadr_si"
 			}
 
+			"CBaseServer__InactivateClients"
+			{
+				"library"		"engine"
+				"linux"			"@_ZN11CBaseServer17InactivateClientsEv"
+			}
+
 			"net_sockets"
 			{
 				"library"		"engine"

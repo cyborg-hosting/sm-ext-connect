@@ -296,6 +296,7 @@ bool BSecure()
 CDetour *g_Detour_CBaseServer__ConnectClient = NULL;
 CDetour *g_Detour_CBaseServer__RejectConnection = NULL;
 CDetour *g_Detour_CBaseServer__CheckChallengeType = NULL;
+CDetour *g_Detour_CBaseServer__InactivateClients = NULL;
 CDetour *g_Detour_CSteam3Server__OnValidateAuthTicketResponse = NULL;
 
 class ConnectClientStorage
@@ -548,6 +549,25 @@ DETOUR_DECL_MEMBER7(CBaseServer__CheckChallengeType, bool, CBaseClient *, pClien
 	}
 
 	return DETOUR_MEMBER_CALL(CBaseServer__CheckChallengeType)(pClient, nUserID, address, nAuthProtocol, pCookie, cbCookie, iClientChallenge);
+}
+
+DETOUR_DECL_MEMBER0(CBaseServer__InactivateClients, void)
+{
+	for(int slot = 0; slot < iserver->GetClientCount(); slot++)
+	{
+		int client = slot + 1;
+		IClient *pClient = iserver->GetClient(slot);
+		if(!pClient)
+			continue;
+
+		// Disconnect all fake clients manually before the engine just nukes them.
+		if(pClient->IsFakeClient() && !pClient->IsHLTV())
+		{
+			pClient->Disconnect("");
+		}
+	}
+
+	return DETOUR_MEMBER_CALL(CBaseServer__InactivateClients)();
 }
 
 void UpdateQueryCache()
@@ -850,6 +870,14 @@ bool Connect::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	}
 	g_Detour_CBaseServer__CheckChallengeType->EnableDetour();
 
+	g_Detour_CBaseServer__InactivateClients = DETOUR_CREATE_MEMBER(CBaseServer__InactivateClients, "CBaseServer__InactivateClients");
+	if(!g_Detour_CBaseServer__InactivateClients)
+	{
+		snprintf(error, maxlen, "Failed to detour CBaseServer__InactivateClients.\n");
+		return false;
+	}
+	g_Detour_CBaseServer__InactivateClients->EnableDetour();
+
 	g_Detour_CSteam3Server__OnValidateAuthTicketResponse = DETOUR_CREATE_MEMBER(CSteam3Server__OnValidateAuthTicketResponse, "CSteam3Server__OnValidateAuthTicketResponse");
 	if(!g_Detour_CSteam3Server__OnValidateAuthTicketResponse)
 	{
@@ -904,6 +932,11 @@ void Connect::SDK_OnUnload()
 	{
 		g_Detour_CBaseServer__CheckChallengeType->Destroy();
 		g_Detour_CBaseServer__CheckChallengeType = NULL;
+	}
+	if(g_Detour_CBaseServer__InactivateClients)
+	{
+		g_Detour_CBaseServer__InactivateClients->Destroy();
+		g_Detour_CBaseServer__InactivateClients = NULL;
 	}
 	if(g_Detour_CSteam3Server__OnValidateAuthTicketResponse)
 	{
@@ -1055,7 +1088,7 @@ void Connect::SDK_OnAllLoaded()
 	{
 		int client = slot + 1;
 		IClient *pClient = iserver->GetClient(slot);
-		if(!pClient || !pClient->IsConnected())
+		if(!pClient)
 			continue;
 
 		CQueryCache::CPlayer &player = g_QueryCache.players[client];
