@@ -890,6 +890,7 @@ bool Connect::SDK_OnLoad(char *error, size_t maxlen, bool late)
 
 	g_pGameEvents->AddListener(&g_ConnectEvents, "player_connect", true);
 	g_pGameEvents->AddListener(&g_ConnectEvents, "player_disconnect", true);
+	g_pGameEvents->AddListener(&g_ConnectEvents, "player_changename", true);
 
 	playerhelpers->AddClientListener(this);
 
@@ -1168,44 +1169,6 @@ void Connect::OnTimer()
 			player.score = info->GetFragCount();
 	}
 
-	/* SANITY CHECK */
-	int countedClients = 0;
-	for(int client = 1; client <= SM_MAXPLAYERS; client++)
-	{
-		CQueryCache::CPlayer &player = g_QueryCache.players[client];
-
-		IClient *pClient = NULL;
-		if((client - 1) < iserver->GetClientCount())
-			pClient = iserver->GetClient(client - 1);
-
-		if(!pClient || !pClient->IsConnected())
-		{
-			if(player.active)
-			{
-				g_pSM->LogMessage(myself, "SANITY_CHECK_FAIL: player.active(True) != pClient->IsConnected(False)");
-				g_pSM->LogMessage(myself, "\tCPlayer(client=%d, active=%d, fake=%d, pClient=%p, name=%s)", client, player.active, player.fake, player.pClient, player.name);
-				player.active = false;
-				player.pClient = NULL;
-			}
-			continue;
-		}
-
-		if(!player.active)
-		{
-			g_pSM->LogMessage(myself, "SANITY_CHECK_FAIL: player.active(False) != pClient->IsConnected(True)");
-			g_pSM->LogMessage(myself, "\tCPlayer(client=%d, name=%s)\n", client, pClient->GetClientName());
-		}
-
-		countedClients++;
-	}
-
-	if(countedClients != g_QueryCache.info.nNumClients)
-	{
-		g_pSM->LogMessage(myself, "SANITY_CHECK_FAIL: countedClients(%d) != nNumClients(%d)", countedClients, g_QueryCache.info.nNumClients);
-		g_QueryCache.info.nNumClients = countedClients;
-	}
-	/* SANITY CHECK */
-
 	UpdateQueryCache();
 }
 
@@ -1226,8 +1189,6 @@ void ConnectEvents::FireGameEvent(IGameEvent *event)
 		{
 			CQueryCache::CPlayer &player = g_QueryCache.players[client];
 
-			g_pSM->LogMessage(myself, "\tPRE CPlayer(active=%d, fake=%d, pClient=%p)", player.active, player.fake, player.pClient);
-
 			player.active = true;
 			player.fake = false;
 			player.pClient = iserver->GetClient(client - 1);
@@ -1243,10 +1204,9 @@ void ConnectEvents::FireGameEvent(IGameEvent *event)
 
 			g_UserIDtoClientMap[userid] = client;
 
-			g_pSM->LogMessage(myself, "\tPOST CPlayer(active=%d, fake=%d, pClient=%p, name=%s)", player.active, player.fake, player.pClient, player.name);
+			g_pSM->LogMessage(myself, "\tCPlayer(active=%d, fake=%d, pClient=%p, name=%s)", player.active, player.fake, player.pClient, player.name);
 		}
-		else
-			g_pSM->LogMessage(myself, "\tIF_CLIENT_FAILED");
+
 	}
 	else if(strcmp(name, "player_disconnect") == 0)
 	{
@@ -1271,8 +1231,6 @@ void ConnectEvents::FireGameEvent(IGameEvent *event)
 			player.active = false;
 			player.pClient = NULL;
 		}
-		else
-			g_pSM->LogMessage(myself, "\tIF_CLIENT_FAILED");
 
 		if(client >= 1 && client <= SM_MAXPLAYERS)
 		{
@@ -1284,6 +1242,13 @@ void ConnectEvents::FireGameEvent(IGameEvent *event)
 				*pSteamID = 0;
 			}
 		}
+	}
+	else if(strcmp(name, "player_changename") == 0)
+	{
+		const int userid = event->GetInt("userid");
+		const int client = g_UserIDtoClientMap[userid];
+
+		g_Connect.OnClientSettingsChanged(client);
 	}
 }
 
