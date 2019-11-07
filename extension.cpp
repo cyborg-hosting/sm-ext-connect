@@ -158,16 +158,16 @@ struct CQueryCache
 		char aGameDescription[255]; // Game | string | Full name of the game.
 		uint8_t aGameDescriptionLen;
 		uint16_t iSteamAppID; // ID | short | Steam Application ID of game.
-		uint8_t nNumClients; // Players | byte | Number of players on the server.
+		uint8_t nNumClients = 0; // Players | byte | Number of players on the server.
 		uint8_t nMaxClients; // Max. Players | byte | Maximum number of players the server reports it can hold.
-		uint8_t nFakeClients; // Bots | byte | Number of bots on the server.
+		uint8_t nFakeClients = 0; // Bots | byte | Number of bots on the server.
 		uint8_t nServerType = 'd'; // Server type | byte | Indicates the type of server: 'd' for a dedicated server, 'l' for a non-dedicated server, 'p' for a SourceTV relay (proxy)
 		uint8_t nEnvironment = 'l'; // Environment | byte | Indicates the operating system of the server: 'l' for Linux, 'w' for Windows, 'm' or 'o' for Mac (the code changed after L4D1)
 		uint8_t nPassword; // Visibility | byte | Indicates whether the server requires a password: 0 for public, 1 for private
 		uint8_t bIsSecure; // VAC | byte | Specifies whether the server uses VAC: 0 for unsecured, 1 for secured
 		char aVersion[40]; // Version | string | Version of the game installed on the server.
 		uint8_t aVersionLen;
-		uint8_t nNewFlags; // Extra Data Flag (EDF) | byte | If present, this specifies which additional data fields will be included.
+		uint8_t nNewFlags = 0; // Extra Data Flag (EDF) | byte | If present, this specifies which additional data fields will be included.
 		uint16_t iUDPPort; // EDF & 0x80 -> Port | short | The server's game port number.
 		uint64_t iSteamID; // EDF & 0x10 -> SteamID | long long | Server's SteamID.
 		uint16_t iHLTVUDPPort; // EDF & 0x40 -> Port | short | Spectator port number for SourceTV.
