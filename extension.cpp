@@ -85,6 +85,7 @@ SMEXT_LINK(&g_Connect);
 ConVar g_ConnectVersion("connect_version", SMEXT_CONF_VERSION, FCVAR_REPLICATED|FCVAR_NOTIFY, SMEXT_CONF_DESCRIPTION " Version");
 ConVar g_SvNoSteam("sv_nosteam", "0", FCVAR_NOTIFY, "Disable steam validation and force steam authentication.");
 ConVar g_SvForceSteam("sv_forcesteam", "0", FCVAR_NOTIFY, "Force steam authentication.");
+ConVar g_SvLogging("sv_connect_logging", "1", FCVAR_NOTIFY, "Log connection checks");
 ConVar *g_pSvVisibleMaxPlayers;
 ConVar *g_pSvTags;
 
@@ -353,7 +354,8 @@ DETOUR_DECL_MEMBER1(CSteam3Server__OnValidateAuthTicketResponse, int, ValidateAu
 	bool SteamLegal = pResponse->m_eAuthSessionResponse == k_EAuthSessionResponseOK;
 	bool force = g_SvNoSteam.GetInt() || g_SvForceSteam.GetInt() || !BLoggedOn();
 
-	g_pSM->LogMessage(myself, "%s SteamLegal: %d (%d)", aSteamID, SteamLegal, pResponse->m_eAuthSessionResponse);
+	if (g_SvLogging.GetInt())
+		g_pSM->LogMessage(myself, "%s SteamLegal: %d (%d)", aSteamID, SteamLegal, pResponse->m_eAuthSessionResponse);
 
 	if(!SteamLegal && force)
 		pResponse->m_eAuthSessionResponse = k_EAuthSessionResponseOK;
@@ -477,7 +479,8 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 		pchPassword = passwordBuffer;
 	}
 
-	g_pSM->LogMessage(myself, "%s SteamAuthFailed: %d (%d) | retVal = %d", aSteamID, SteamAuthFailed, result, retVal);
+	if (g_SvLogging.GetInt())
+		g_pSM->LogMessage(myself, "%s SteamAuthFailed: %d (%d) | retVal = %d", aSteamID, SteamAuthFailed, result, retVal);
 
 	// k_OnClientPreConnectEx_Reject
 	if(retVal == 0)
@@ -989,9 +992,13 @@ cell_t ClientPreConnectEx(IPluginContext *pContext, const cell_t *params)
 		return 1;
 
 	bool force = g_SvNoSteam.GetInt() || g_SvForceSteam.GetInt() || !BLoggedOn();
+
+
 	if(Storage.SteamAuthFailed && force && !Storage.GotValidateAuthTicketResponse)
 	{
-		g_pSM->LogMessage(myself, "%s Force ValidateAuthTicketResponse", pSteamID);
+		if (g_SvLogging.GetInt())
+			g_pSM->LogMessage(myself, "%s Force ValidateAuthTicketResponse", pSteamID);
+
 		Storage.ValidateAuthTicketResponse.m_SteamID = CSteamID(Storage.ullSteamID);
 		Storage.ValidateAuthTicketResponse.m_eAuthSessionResponse = k_EAuthSessionResponseOK;
 		Storage.ValidateAuthTicketResponse.m_OwnerSteamID = Storage.ValidateAuthTicketResponse.m_SteamID;
@@ -1001,7 +1008,9 @@ cell_t ClientPreConnectEx(IPluginContext *pContext, const cell_t *params)
 	// Make sure this is always called in order to verify the client on the server
 	if(Storage.GotValidateAuthTicketResponse)
 	{
-		g_pSM->LogMessage(myself, "%s Replay ValidateAuthTicketResponse", pSteamID);
+		if (g_SvLogging.GetInt())
+			g_pSM->LogMessage(myself, "%s Replay ValidateAuthTicketResponse", pSteamID);
+
 		DETOUR_MEMBER_MCALL_ORIGINAL(CSteam3Server__OnValidateAuthTicketResponse, g_pSteam3Server)(&Storage.ValidateAuthTicketResponse);
 	}
 
@@ -1016,11 +1025,14 @@ cell_t SteamClientAuthenticated(IPluginContext *pContext, const cell_t *params)
 	ConnectClientStorage Storage;
 	if(g_ConnectClientStorage.retrieve(pSteamID, &Storage))
 	{
-		g_pSM->LogMessage(myself, "%s SteamClientAuthenticated: %d", pSteamID, Storage.SteamLegal);
+		if (g_SvLogging.GetInt())
+			g_pSM->LogMessage(myself, "%s SteamClientAuthenticated: %d", pSteamID, Storage.SteamLegal);
+
 		return Storage.SteamLegal;
 	}
+	if (g_SvLogging.GetInt())
+		g_pSM->LogMessage(myself, "%s SteamClientAuthenticated: FALSE!", pSteamID);
 
-	g_pSM->LogMessage(myself, "%s SteamClientAuthenticated: FALSE!", pSteamID);
 	return false;
 }
 
@@ -1183,7 +1195,10 @@ void ConnectEvents::FireGameEvent(IGameEvent *event)
 		const bool bot = event->GetBool("bot");
 		const char *name = event->GetString("name");
 
-		g_pSM->LogMessage(myself, "player_connect(client=%d, userid=%d, bot=%d, name=%s)", client, userid, bot, name);
+		
+
+		if (g_SvLogging.GetInt())
+			g_pSM->LogMessage(myself, "player_connect(client=%d, userid=%d, bot=%d, name=%s)", client, userid, bot, name);
 
 		if(client >= 1 && client <= SM_MAXPLAYERS)
 		{
@@ -1204,7 +1219,8 @@ void ConnectEvents::FireGameEvent(IGameEvent *event)
 
 			g_UserIDtoClientMap[userid] = client;
 
-			g_pSM->LogMessage(myself, "\tCPlayer(active=%d, fake=%d, pClient=%p, name=%s)", player.active, player.fake, player.pClient, player.name);
+			if (g_SvLogging.GetInt())
+				g_pSM->LogMessage(myself, "\tCPlayer(active=%d, fake=%d, pClient=%p, name=%s)", player.active, player.fake, player.pClient, player.name);
 		}
 
 	}
@@ -1214,13 +1230,14 @@ void ConnectEvents::FireGameEvent(IGameEvent *event)
 		const int client = g_UserIDtoClientMap[userid];
 		g_UserIDtoClientMap[userid] = 0;
 
-		g_pSM->LogMessage(myself, "player_disconnect(userid=%d, client=%d)", userid, client);
+		if (g_SvLogging.GetInt())
+			g_pSM->LogMessage(myself, "player_disconnect(userid=%d, client=%d)", userid, client);
 
 		if(client >= 1 && client <= SM_MAXPLAYERS)
 		{
 			CQueryCache::CPlayer &player = g_QueryCache.players[client];
-
-			g_pSM->LogMessage(myself, "\tCPlayer(active=%d, fake=%d, pClient=%p, name=%s)", player.active, player.fake, player.pClient, player.name);
+			if (g_SvLogging.GetInt())
+				g_pSM->LogMessage(myself, "\tCPlayer(active=%d, fake=%d, pClient=%p, name=%s)", player.active, player.fake, player.pClient, player.name);
 
 			if(player.active)
 			{
@@ -1237,7 +1254,9 @@ void ConnectEvents::FireGameEvent(IGameEvent *event)
 			char *pSteamID = g_ClientSteamIDMap[client];
 			if(*pSteamID)
 			{
-				g_pSM->LogMessage(myself, "%s OnClientDisconnecting: %d", pSteamID, client);
+				if (g_SvLogging.GetInt())
+					g_pSM->LogMessage(myself, "%s OnClientDisconnecting: %d", pSteamID, client);
+
 				g_ConnectClientStorage.remove(pSteamID);
 				*pSteamID = 0;
 			}
