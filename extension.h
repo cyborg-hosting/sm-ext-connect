@@ -120,25 +120,7 @@ public:
 
 public:  // IConCommandBaseAccessor
 	virtual bool RegisterConCommandBase(ConCommandBase *pVar);
-
-public:  // IClientListener
-	virtual void OnClientSettingsChanged(int client);
-	virtual void OnClientPutInServer(int client);
-public:
-	void OnTimer();
 };
 
-class ConnectEvents : public IGameEventListener2
-{
-public:
-	virtual void FireGameEvent( IGameEvent *event );
-};
-
-class ConnectTimer : public ITimedEvent
-{
-public:
-	virtual ResultType OnTimer(ITimer *pTimer, void *pData);
-	virtual void OnTimerEnd(ITimer *pTimer, void *pData);
-};
 
 #endif // _INCLUDE_SOURCEMOD_EXTENSION_PROPER_H_
