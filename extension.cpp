@@ -362,6 +362,13 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 		// Another player trying to spoof a Steam ID or game crashed?
 		if(memcmp(address.ip, Storage.address.ip, sizeof(address.ip)) != 0)
 		{
+			if (g_SvLogging->GetInt())
+			{
+				char ipConnectedString[32];
+				V_snprintf(ipConnectedString, sizeof(ipConnectedString), "%u.%u.%u.%u", Storage.address.ip[0], Storage.address.ip[1], Storage.address.ip[2], Storage.address.ip[3]);
+				g_pSM->LogMessage(myself, "Spoof Alert: Connecting address: %s | Connected address: %s", ipString, ipConnectedString);
+			}
+
 			// Reject NoSteam players
 			if(SteamAuthFailed)
 			{
@@ -372,7 +379,9 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 			// Kick existing player
 			if(Storage.pClient)
 			{
-				Storage.pClient->Disconnect("Same Steam ID connected.");
+				// Client ip changed during the game ?
+				if (!Storage.SteamLegal)
+					Storage.pClient->Disconnect("Same Steam ID connected.");
 			}
 			else
 			{
