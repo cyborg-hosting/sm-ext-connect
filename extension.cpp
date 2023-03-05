@@ -314,7 +314,7 @@ DETOUR_DECL_MEMBER9(CBaseServer__ConnectClient, IClient *, netadr_t &, address, 
 	V_snprintf(ipString, sizeof(ipString), "%u.%u.%u.%u", address.ip[0], address.ip[1], address.ip[2], address.ip[3]);
 
 	char passwordBuffer[255];
-	strncpy(passwordBuffer, pchPassword, sizeof(passwordBuffer));
+	V_strncpy(passwordBuffer, pchPassword, sizeof(passwordBuffer));
 	uint64 ullSteamID = *(uint64 *)pCookie;
 
 	void *pvTicket = (void *)((intptr_t)pCookie + sizeof(uint64));
@@ -648,6 +648,7 @@ cell_t ClientPreConnectEx(IPluginContext *pContext, const cell_t *params)
 	if(retVal == 0)
 	{
 		RejectConnection(Storage.address, Storage.iClientChallenge, rejectReason);
+		g_ConnectClientStorage.remove(pSteamID);
 		return 0;
 	}
 
@@ -656,7 +657,10 @@ cell_t ClientPreConnectEx(IPluginContext *pContext, const cell_t *params)
 		Storage.nAuthProtocol, Storage.pchName, Storage.pchPassword, Storage.pCookie, Storage.cbCookie);
 
 	if(!pClient)
+	{
+		g_ConnectClientStorage.remove(pSteamID);
 		return 1;
+	}
 
 	bool force = g_SvNoSteam->GetInt() || g_SvForceSteam->GetInt() || !BLoggedOn();
 
@@ -679,6 +683,8 @@ cell_t ClientPreConnectEx(IPluginContext *pContext, const cell_t *params)
 
 		DETOUR_MEMBER_MCALL_ORIGINAL(CSteam3Server__OnValidateAuthTicketResponse, g_pSteam3Server)(&Storage.ValidateAuthTicketResponse);
 	}
+
+	g_ConnectClientStorage.remove(pSteamID);
 
 	return 0;
 }
